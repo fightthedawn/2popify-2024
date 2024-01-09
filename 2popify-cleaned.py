@@ -7,6 +7,7 @@ import soundfile as sf
 import subprocess
 import argparse
 
+
 def convert_to_wav(audio_path):
     """Converts the audio file to WAV format."""
     audio = AudioSegment.from_file(audio_path)
@@ -47,20 +48,29 @@ def find_music_onset(audio_path):
     """Finds the onset of music in an audio file."""
     if not audio_path.endswith('.wav'):
         audio_path = convert_to_wav(audio_path)
+
     y, sr = librosa.load(audio_path, sr=None, mono=True)
-    onset_frames = librosa.onset.onset_detect(y=y, sr=sr, units='time')
+
+    # Highly sensitive parameters for onset detection
+    onset_frames = librosa.onset.onset_detect(y=y, sr=sr, units='time',
+                                              pre_max=1, post_max=1,
+                                              pre_avg=1, post_avg=1, 
+                                              delta=0.01, wait=1)
+
     return int(onset_frames[0] * 1000) if onset_frames.any() else 0
 
 def normalize_loudness_ffmpeg(input_file, output_file, export_level):
     """Normalize the loudness of an audio file using FFmpeg."""
+    FNULL = open(os.devnull, 'w')  # Use this to redirect FFmpeg's output
     cmd = [
         'ffmpeg',
         '-i', input_file,
         '-filter_complex', f'loudnorm=I={export_level}:TP=-1.5:LRA=11',
-        '-y',
+        '-y',  # Overwrite the output file if it exists
         output_file
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, stdout=FNULL, stderr=subprocess.STDOUT)
+    FNULL.close()
 
 def process_audio_file(file_path, model, classes, exports_folder, detection_threshold=0.95, export_level=-14):
     """Processes an audio file."""
