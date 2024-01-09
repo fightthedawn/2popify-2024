@@ -152,7 +152,7 @@ model = tf.saved_model.load('2popmodel20000')  # Replace with the path to your m
 classes = ["Music", "2pop"]
 
 # Folder containing audio files
-folder_path = "TestData5"  # Replace with your folder path
+folder_path = "TestData/TestData5"  # Replace with your folder path
 
 # Process the folder
 process_folder(folder_path, model, classes)
