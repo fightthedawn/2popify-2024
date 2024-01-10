@@ -92,6 +92,7 @@ def process_folder(folder_path, model, classes, export_level):
     shutil.rmtree(temp_folder)
     print(f"Total processing time: {time.time() - start_time:.2f} seconds.")
 
+# Sets all settings, loads model, and runs Main function to process provided folder
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process audio files for 2 pop detection and normalization.")
     parser.add_argument("folder_path", type=str, help="Path to the folder containing audio files")
