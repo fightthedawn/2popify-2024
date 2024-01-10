@@ -10,15 +10,15 @@ import time
 import concurrent.futures
 import shutil
 
+# Function to convert audio file to WAV format
 def convert_to_wav(audio_path):
-    """Converts the audio file to WAV format."""
     audio = AudioSegment.from_file(audio_path)
     wav_path = os.path.splitext(audio_path)[0] + ".wav"
     audio.export(wav_path, format="wav")
     return wav_path
 
+# Function to preprocess audio for the model
 def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True):
-    """Load audio, prepend silence, find the first sound onset, and preprocess a segment for the model."""
     audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
     silence_duration = int(0.5 * sr)
     audio = np.concatenate([np.zeros(silence_duration), audio])
@@ -29,15 +29,15 @@ def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, no
     end_sample = min(onset_sample + int(sr * (duration_ms / 1000.0)), len(audio))
     return audio[onset_sample:end_sample]
 
+# Function to detect a 2 pop in the audio using the trained model
 def detect_2_pop_with_model(audio_path, model, classes, detection_threshold):
-    """Detects if the first 1.5 seconds of audio contains a 2 pop."""
     waveform = preprocess_audio_for_model(audio_path)
     inp = tf.constant(np.array([waveform]), dtype='float32')
     class_scores = model(inp)[0].numpy()
     return float(class_scores[classes.index("2pop")]) > detection_threshold
 
+# Function to find the onset of music in an audio file
 def find_music_onset(audio_path):
-    """Finds the onset of music in an audio file."""
     if not audio_path.endswith(('.wav', '.aif', '.aiff')):
         audio_path = convert_to_wav(audio_path)
 
@@ -45,20 +45,20 @@ def find_music_onset(audio_path):
     onset_frames = librosa.onset.onset_detect(y=y, sr=sr, units='time', pre_max=1, post_max=1, pre_avg=1, post_avg=1, delta=0.01, wait=1)
     return int(onset_frames[0] * 1000) if onset_frames.any() else 0
 
+# Function to normalize the loudness of an audio file using FFmpeg
 def normalize_loudness_ffmpeg(input_file, output_file, export_level):
-    """Normalizes the loudness of an audio file using FFmpeg."""
     FNULL = open(os.devnull, 'w')
     cmd = ['ffmpeg', '-i', input_file, '-filter_complex', f'loudnorm=I={export_level}:TP=-1.5:LRA=11', '-y', output_file]
     subprocess.run(cmd, stdout=FNULL, stderr=subprocess.STDOUT)
     FNULL.close()
 
+# Function to normalize an audio file and move it to the exports folder
 def normalize_audio_file(input_file, exports_folder, export_level):
-    """Normalizes an audio file and moves it to the exports folder."""
     output_file = os.path.join(exports_folder, os.path.basename(input_file))
     normalize_loudness_ffmpeg(input_file, output_file, export_level)
 
+# Function to process an audio file and export it to a temporary folder
 def process_audio_file(file_path, model, classes, temp_folder, detection_threshold=0.95):
-    """Processes an audio file and exports it to a temporary folder."""
     audio = AudioSegment.from_file(file_path)
     temp_file = os.path.join(temp_folder, os.path.basename(file_path))
 
@@ -70,8 +70,8 @@ def process_audio_file(file_path, model, classes, temp_folder, detection_thresho
         trimmed_audio = AudioSegment.silent(duration=silence_duration, frame_rate=audio.frame_rate) + audio[max(0, start_of_music - 500):]
         trimmed_audio.set_frame_rate(audio.frame_rate).set_channels(audio.channels).export(temp_file, format="wav")
 
+# Main function to process all audio files in a folder
 def process_folder(folder_path, model, classes, export_level):
-    """Processes all audio files in a folder with parallel normalization."""
     start_time = time.time()
     temp_folder, exports_folder = os.path.join(folder_path, "Temp"), os.path.join(folder_path, "Exports")
 
