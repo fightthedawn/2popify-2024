@@ -98,6 +98,6 @@ if __name__ == "__main__":
     parser.add_argument("folder_path", type=str, help="Path to the folder containing audio files")
     parser.add_argument("--level", type=float, default=-14, help="Export loudness level")
     args = parser.parse_args()
-    model = tf.saved_model.load('ModelsTrained/2popmodel60000')
+    model = tf.saved_model.load('ModelsTrained/2popmodel100000-20240110')
     classes = ["Music", "2pop"]
     process_folder(args.folder_path, model, classes, args.level)
