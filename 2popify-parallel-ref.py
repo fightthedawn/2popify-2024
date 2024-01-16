@@ -43,27 +43,41 @@ def find_music_onset(audio_path):
     onset_frames = librosa.onset.onset_detect(y=y, sr=sr, units='time', pre_max=1, post_max=1, pre_avg=1, post_avg=1, delta=0.01, wait=1)
     return int(onset_frames[0] * 1000) if onset_frames.any() else 0
 
-def normalize_loudness_ffmpeg(input_file, output_file, export_level):
-    FNULL = open(os.devnull, 'w')
+def normalize_loudness_ffmpeg(input_file, output_file, export_level, timeout=60):
     cmd = ['ffmpeg', '-i', input_file, '-filter_complex', f'loudnorm=I={export_level}:TP=-1.5:LRA=11', '-y', output_file]
-    subprocess.run(cmd, stdout=FNULL, stderr=subprocess.STDOUT)
-    FNULL.close()
+    try:
+        # Run FFmpeg and wait for it to complete with a timeout
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        print(f"FFmpeg Output: {process.stdout.decode('utf-8')}")
+        print(f"FFmpeg Errors: {process.stderr.decode('utf-8')}")
+    except subprocess.TimeoutExpired:
+        print(f"FFmpeg command timed out on file {input_file}")
+    except Exception as e:
+        print(f"Error running FFmpeg on file {input_file}: {e}")
 
 # Combined and parallelized function
 
 def process_and_normalize_audio(file_path, model, classes, temp_folder, exports_folder, detection_threshold, export_level):
     # Process the audio file
-    print(f"Processing started for {file_path}")
+    print(f"Starting processing for {file_path}")
+    
+    print(f"Reading file: {file_path}")
     audio = AudioSegment.from_file(file_path)
+    
     temp_file = os.path.join(temp_folder, os.path.basename(file_path))
 
+    print("Checking for 2 pop...")
     if detect_2_pop_with_model(file_path, model, classes, detection_threshold):
+        print("2 pop detected. Processing...")
         audio[1500:].export(temp_file, format="wav")
     else:
+        print("No 2 pop detected. Finding music onset...")
         start_of_music = find_music_onset(file_path)
         silence_duration = max(500 - start_of_music, 0)
         trimmed_audio = AudioSegment.silent(duration=silence_duration, frame_rate=audio.frame_rate) + audio[max(0, start_of_music - 500):]
         trimmed_audio.set_frame_rate(audio.frame_rate).set_channels(audio.channels).export(temp_file, format="wav")
+
+    print(f"Completed processing for {file_path}. Now normalizing...")
     
     # Normalize and export the audio file
     output_file = os.path.join(exports_folder, os.path.basename(file_path))
@@ -71,12 +85,10 @@ def process_and_normalize_audio(file_path, model, classes, temp_folder, exports_
     print(f"Processing completed for {file_path}")
 
 # Main function with parallelization
-
 def process_folder_parallel(folder_path, model, classes, export_level, detection_threshold=0.95):
-    print("Starting parallel processing")
+    print("Starting processing with a single thread")
     start_time = time.time()
     
-    # Define temp_folder and exports_folder in the scope of this function
     temp_folder = os.path.join(folder_path, "Temp")
     exports_folder = os.path.join(folder_path, "Exports")
 
@@ -85,7 +97,7 @@ def process_folder_parallel(folder_path, model, classes, export_level, detection
     os.makedirs(temp_folder, exist_ok=True)
     os.makedirs(exports_folder, exist_ok=True)
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         futures = []
         for filename in os.listdir(folder_path):
             if filename.lower().endswith(('.wav', '.aif', '.aiff', '.mp3', '.mp4')):
