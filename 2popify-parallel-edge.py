@@ -18,7 +18,7 @@ def convert_to_wav(audio_path):
     return wav_path
 
 # Function to preprocess audio for the model
-def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True):
+def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=406, normalize=True):
     audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
     silence_duration = int(0.5 * sr)
     audio = np.concatenate([np.zeros(silence_duration), audio])
@@ -27,14 +27,40 @@ def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, no
     onset_frames = librosa.onset.onset_detect(y=audio, sr=sr, units='samples', backtrack=True)
     onset_sample = onset_frames[0] if onset_frames.size > 0 else silence_duration
     end_sample = min(onset_sample + int(sr * (duration_ms / 1000.0)), len(audio))
-    return audio[onset_sample:end_sample]
+    audio_segment = audio[onset_sample:end_sample]
+
+    # Ensure the audio segment is exactly the size expected by the model
+    if len(audio_segment) < 6500:
+        # If the segment is too short, pad with zeros
+        audio_segment = np.pad(audio_segment, (0, 6500 - len(audio_segment)), 'constant')
+    elif len(audio_segment) > 6500:
+        # If the segment is too long, truncate it
+        audio_segment = audio_segment[:6500]
+    
+    return audio_segment
 
 # Function to detect a 2 pop in the audio using the trained model
 def detect_2_pop_with_model(audio_path, model, classes, detection_threshold):
+    print(f"Processing file: {audio_path}")  # Print the file name
     waveform = preprocess_audio_for_model(audio_path)
-    inp = tf.constant(np.array([waveform]), dtype='float32')
-    class_scores = model(inp)[0].numpy()
-    return float(class_scores[classes.index("2pop")]) > detection_threshold
+    waveform = np.expand_dims(waveform, axis=0).astype(np.float32)
+    
+    try:
+        class_scores = model.predict(waveform)[0]
+    except AttributeError:
+        class_scores = model.signatures['serving_default'](tf.constant(waveform))[list(model.signatures['serving_default'].structured_outputs.keys())[0]].numpy()
+
+    print("Class scores:", class_scores)
+    print("Classes list:", classes)
+
+    # Extract the specific score for "Music"
+    music_score = class_scores[0][0]
+
+    # A lower "Music" score (below the threshold) suggests a higher likelihood of "2pop"
+    is_two_pop = music_score < (1 - detection_threshold)
+
+    return is_two_pop
+
 
 # Function to find the onset of music in an audio file
 def find_music_onset(audio_path):
@@ -98,7 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("folder_path", type=str, help="Path to the folder containing audio files")
     parser.add_argument("--level", type=float, default=-14, help="Export loudness level")
     args = parser.parse_args()
-    model = tf.saved_model.load('ModelsTrained/2popmodel100000-20240110')
-    #model = tf.saved_model.load('ModelsTrained/2popedge20240117')
+    #model = tf.saved_model.load('ModelsTrained/2popmodel100000-20240110')
+    model = tf.saved_model.load('ModelsTrained/2popedge20240117')
     classes = ["Music", "2pop"]
     process_folder(args.folder_path, model, classes, args.level)
