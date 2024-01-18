@@ -99,6 +99,6 @@ if __name__ == "__main__":
     parser.add_argument("--level", type=float, default=-14, help="Export loudness level")
     args = parser.parse_args()
     model = tf.saved_model.load('ModelsTrained/2popmodel100000-20240110')
-    #model = tf.saved_model.load('ModelsTrained/2popedge20240117')
+    #model = tf.saved_model.load('ModelsTrained/2pop20240118')
     classes = ["Music", "2pop"]
     process_folder(args.folder_path, model, classes, args.level)
