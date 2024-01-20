@@ -20,13 +20,16 @@ def convert_to_wav(audio_path):
     return wav_path
 
 # Function to preprocess audio for the model
-def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True):
+def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True, load_duration=None, load_offset=0):
     # Start timing
     start_time = time.time()
 
-    # Load audio
+    # Load audio with librosa
     load_start = time.time()
-    audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
+    if load_duration:
+        audio, sr = librosa.load(audio_path, sr=target_sr, mono=True, offset=load_offset, duration=load_duration)
+    else:
+        audio, sr = librosa.load(audio_path, sr=target_sr, mono=True, offset=load_offset)
     load_end = time.time()
 
     # Add silence
