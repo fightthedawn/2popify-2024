@@ -1,7 +1,10 @@
 import os
 import numpy as np
+from scipy.signal import butter, lfilter
+import noisereduce as nr
 import librosa
 import tensorflow as tf
+import soundfile as sf
 from pydub import AudioSegment
 import argparse
 import time
@@ -16,22 +19,55 @@ def convert_to_wav(audio_path):
     audio.export(wav_path, format="wav")
     return wav_path
 
+def butter_bandpass(lowcut, highcut, sr, order=5):
+    nyq = 0.5 * sr
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
+
+def butter_bandpass_filter(data, lowcut, highcut, sr, order=5):
+    b, a = butter_bandpass(lowcut, highcut, sr, order=order)
+    y = lfilter(b, a, data)
+    return y
+
 # Function to preprocess audio for the model
-def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True):
+def preprocess_audio_for_model(audio_path, target_sr=16000, normalize=True):
+    # Load the audio file
     audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
-    silence_duration = int(0.5 * sr)
-    audio = np.concatenate([np.zeros(silence_duration), audio])
-    if normalize:
-        audio = librosa.util.normalize(audio)
-    onset_frames = librosa.onset.onset_detect(y=audio, sr=sr, units='samples', backtrack=True)
-    onset_sample = onset_frames[0] if onset_frames.size > 0 else silence_duration
-    end_sample = min(onset_sample + int(sr * (duration_ms / 1000.0)), len(audio))
-    return audio[onset_sample:end_sample]
+    
+    # Apply noise reduction
+    audio_reduced_noise = nr.reduce_noise(y=audio, sr=sr)
+    
+    # Proceed with your existing preprocessing steps, starting with bandpass filtering
+    lowcut = 140
+    highcut = 2200
+    order = 5
+    nyq = 0.5 * sr
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    
+    # Apply the bandpass filter on the noise-reduced audio
+    audio_filtered = lfilter(b, a, audio_reduced_noise)
+    
+    # Instead of adding silence and normalizing, directly slice the first 1500ms for 2pop detection
+    # This step bypasses onset detection and uses the first 1500ms of the filtered audio
+    audio_slice_for_2pop_detection = audio_filtered[:int(1.5 * sr)]
+    
+    # Optionally, export this slice for review
+    export_dir = "2popIso"
+    os.makedirs(export_dir, exist_ok=True)
+    file_name = os.path.splitext(os.path.basename(audio_path))[0] + "_2pop_slice.wav"
+    export_path = os.path.join(export_dir, file_name)
+    sf.write(export_path, audio_slice_for_2pop_detection, sr)
+
+    return audio_slice_for_2pop_detection, sr
 
 # Function to detect a 2 pop in the audio using the trained model
 def detect_2_pop_with_model(audio_path, model, classes, detection_threshold):
-    waveform = preprocess_audio_for_model(audio_path)
-    inp = tf.constant(np.array([waveform]), dtype='float32')
+    waveform, sr = preprocess_audio_for_model(audio_path)  # Adjusted to unpack the returned tuple
+    inp = tf.constant(np.array([waveform]), dtype='float32')  # waveform is now correctly referenced
     class_scores = model(inp)[0].numpy()
     return float(class_scores[classes.index("2pop")]) > detection_threshold
 
@@ -50,12 +86,33 @@ def process_audio_file(file_path, model, classes, temp_folder, detection_thresho
     temp_file = os.path.join(temp_folder, os.path.basename(file_path))
 
     if detect_2_pop_with_model(file_path, model, classes, detection_threshold):
-        audio[1500:].export(temp_file, format="wav")
+        # If a 2 pop is detected, trim the first 1500ms from the audio
+        audio_trimmed_for_onset_detection = audio[1500:]
+        
+        # Export the trimmed audio temporarily for onset detection
+        temp_trimmed_path = os.path.join(temp_folder, "temp_for_onset_detection.wav")
+        audio_trimmed_for_onset_detection.export(temp_trimmed_path, format="wav")
+        
+        # Now use the trimmed audio to find the music onset
+        start_of_music = find_music_onset(temp_trimmed_path)  # Using the trimmed file
+        
+        # Calculate the actual start position in the original audio
+        # 1500ms for the 2 pop + detected onset - 500ms before the onset for the cut
+        actual_start_position = max(start_of_music + 1000, 0)  # Ensure it doesn't go negative
+        
+        # Trim the original audio based on the calculated start position and export
+        trimmed_audio = audio[actual_start_position:]
+        trimmed_audio.export(temp_file, format="wav")
+        
+        # Clean up the temporary file used for onset detection
+        os.remove(temp_trimmed_path)
+
     else:
+        # If no 2 pop is detected, use the original logic for music onset detection
         start_of_music = find_music_onset(file_path)
         silence_duration = max(500 - start_of_music, 0)
         trimmed_audio = AudioSegment.silent(duration=silence_duration, frame_rate=audio.frame_rate) + audio[max(0, start_of_music - 500):]
-        trimmed_audio.set_frame_rate(audio.frame_rate).set_channels(audio.channels).export(temp_file, format="wav")
+        trimmed_audio.export(temp_file, format="wav")
 
 # Main function to process all audio files in a folder
 def process_folder(folder_path, model, classes):
