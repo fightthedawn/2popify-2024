@@ -88,7 +88,7 @@ def process_folder(folder_path, model, classes):
 
     # Clean up the temporary folder after moving its contents
     shutil.rmtree(temp_folder)
-    print(f"Total processing time: {time.time() - start_time:.2f} seconds.")
+    print(f"Total processing time: {time.time() - start_time:.2f} seconds.\n")
 
 # Load model, parse arguments, and run the main function
 if __name__ == "__main__":

@@ -25,33 +25,33 @@ def audio_segment_to_numpy_array(audio_segment):
 def normalize_audio(folder_path):
     formats_to_convert = ['.wav', '.aif', '.aiff', '.mp3', '.m4a']
     loudness_values = []
+    file_loudness_map = {}  # Create a map to store filename and its loudness
 
-    print("Step 1 & 2: Normalizing to -1 dB True Peak and measuring LUFS.\n\n")
     file_paths = [os.path.join(folder_path, file) for file in os.listdir(folder_path) if os.path.splitext(file)[1].lower() in formats_to_convert]
 
-    # Normalize and measure LUFS
     for file_path in file_paths:
-        print(f"Processing {file_path}")
         audio = AudioSegment.from_file(file_path)
-        
         peak_normalize_db = -1.0 - audio.max_dBFS
         normalized_audio = audio.apply_gain(peak_normalize_db)
         
         audio_data, sample_rate = audio_segment_to_numpy_array(normalized_audio)
         meter = Meter(sample_rate)
         loudness = meter.integrated_loudness(audio_data)
+        
         loudness_values.append(loudness)
-        print(f"Loudness of {os.path.basename(file_path)}: {loudness} LUFS")
+        file_loudness_map[file_path] = loudness
 
     if not loudness_values:
-        print("No audio files were processed for loudness measurement.")
         return
 
     lowest_lufs = min(loudness_values)
-    print(f"\n\nLowest LUFS in the batch: {lowest_lufs}")
+    # Find the filename with the lowest LUFS
+    lowest_lufs_file = [file for file, lufs in file_loudness_map.items() if lufs == lowest_lufs][0]
+    
+    print(f"\nLowest LUFS in the batch: {lowest_lufs} (File: {os.path.basename(lowest_lufs_file)})")
 
     # Apply normalization based on the lowest LUFS
-    print("\n\nStep 3: Normalizing files to the lowest LUFS value.")
+    #print("\n\nStep 3: Normalizing files to the lowest LUFS value.")
     for file_path in file_paths:
         audio = AudioSegment.from_file(file_path)
         
@@ -59,7 +59,7 @@ def normalize_audio(folder_path):
         meter = Meter(sample_rate)
         current_loudness = meter.integrated_loudness(audio_data)
         gain_to_apply = lowest_lufs - current_loudness
-        print(f"{os.path.basename(file_path)} - Current LUFS: {current_loudness}, Gain to apply: {gain_to_apply} dB")
+        #print(f"{os.path.basename(file_path)} - Current LUFS: {current_loudness}, Gain to apply: {gain_to_apply} dB")
         
         final_normalized_audio = audio.apply_gain(gain_to_apply)
         
@@ -76,7 +76,7 @@ def normalize_audio(folder_path):
         # Overwrite the original file with its normalized version
         final_normalized_audio.export(file_path, format=export_format)
 
-    print("Normalization completed. Files have been replaced in the original directory.")
+    print("\nNormalization completed. Files have been replaced in the original directory.\n")
 
 if __name__ == "__main__":
     #folder_path = 'TestData/TestData7'  # Adjust as necessary
