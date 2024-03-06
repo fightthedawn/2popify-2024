@@ -31,6 +31,50 @@ def butter_bandpass_filter(data, lowcut, highcut, sr, order=5):
     y = lfilter(b, a, data)
     return y
 
+'''# Function to preprocess audio for the model
+def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True):
+    # Load the audio file
+    audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
+    
+    # Apply noise reduction
+    audio_reduced_noise = nr.reduce_noise(y=audio, sr=sr)
+    
+    # Proceed with your existing preprocessing steps, starting with bandpass filtering
+    lowcut = 140
+    highcut = 2200
+    order = 5
+    nyq = 0.5 * sr
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    
+    # Apply the bandpass filter on the noise-reduced audio
+    audio_filtered = lfilter(b, a, audio_reduced_noise)
+    
+    # Continue with the addition of silence, normalization, and onset detection
+    silence_duration = int(0.5 * sr)
+    audio_filtered_with_silence = np.concatenate([np.zeros(silence_duration), audio_filtered])
+    if normalize:
+        audio_filtered_with_silence = librosa.util.normalize(audio_filtered_with_silence)
+    
+    onset_frames = librosa.onset.onset_detect(y=audio_filtered_with_silence, sr=sr, units='samples', backtrack=True)
+    onset_sample = onset_frames[0] if onset_frames.size > 0 else silence_duration
+    end_sample = min(onset_sample + int(sr * (duration_ms / 1000.0)), len(audio_filtered_with_silence))
+    
+    # Ensure the directory exists
+    export_dir = "2popIso"
+    os.makedirs(export_dir, exist_ok=True)
+    
+    # Change file extension to .wav for export
+    export_basename = os.path.splitext(os.path.basename(audio_path))[0] + ".wav"
+    export_path = os.path.join(export_dir, export_basename)
+    
+    # Export the processed audio as .wav
+    sf.write(export_path, audio_filtered_with_silence[onset_sample:end_sample], sr)
+    
+    return audio_filtered_with_silence[onset_sample:end_sample], sr
+'''
+
 # Function to preprocess audio for the model
 def preprocess_audio_for_model(audio_path, target_sr=16000, normalize=True):
     # Load the audio file
@@ -55,13 +99,14 @@ def preprocess_audio_for_model(audio_path, target_sr=16000, normalize=True):
     # This step bypasses onset detection and uses the first 1500ms of the filtered audio
     audio_slice_for_2pop_detection = audio_filtered[:int(1.5 * sr)]
     
+    '''
     # Optionally, export this slice for review
     export_dir = "2popIso"
     os.makedirs(export_dir, exist_ok=True)
     file_name = os.path.splitext(os.path.basename(audio_path))[0] + "_2pop_slice.wav"
     export_path = os.path.join(export_dir, file_name)
     sf.write(export_path, audio_slice_for_2pop_detection, sr)
-
+    '''
     return audio_slice_for_2pop_detection, sr
 
 # Function to detect a 2 pop in the audio using the trained model
