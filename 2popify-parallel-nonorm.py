@@ -61,27 +61,36 @@ def process_audio_file(file_path, model, classes, temp_folder, detection_thresho
 def process_folder(folder_path, model, classes):
     start_time = time.time()
     temp_folder = os.path.join(folder_path, "Temp")
-    exports_folder = os.path.join(folder_path, "Exports")  # Define the exports folder path
 
-    shutil.rmtree(temp_folder, ignore_errors=True)  # Ensure temp folder is removed if exists
+    # Remove the temp folder if it exists, then recreate it
+    shutil.rmtree(temp_folder, ignore_errors=True)
     os.makedirs(temp_folder, exist_ok=True)
 
-    # Process each audio file
+    # Process each audio file and save it to the temp folder
     for filename in os.listdir(folder_path):
         if filename.lower().endswith(('.wav', '.aif', '.aiff', '.mp3', '.mp4')):
             process_audio_file(os.path.join(folder_path, filename), model, classes, temp_folder, detection_threshold=0.5)
+    
+    # Normalize the processed audio files in the temp folder before final export
+    normalize_audio(temp_folder)  # This function is called to normalize files directly in the temp folder
 
+    exports_folder = os.path.join(folder_path, "Exports")
     # Check if exports folder exists and remove it if it does
     if os.path.exists(exports_folder):
         shutil.rmtree(exports_folder)
+    os.makedirs(exports_folder, exist_ok=True)  # Ensure the exports folder is created
 
-    # Instead of removing the temp folder, move/rename it to 'Exports'
-    shutil.move(temp_folder, exports_folder)
+    # Move normalized files from the temp folder to the exports folder
+    for file_name in os.listdir(temp_folder):
+        src_file_path = os.path.join(temp_folder, file_name)
+        dst_file_path = os.path.join(exports_folder, file_name)
+        shutil.move(src_file_path, dst_file_path)
 
+    # Clean up the temporary folder after moving its contents
+    shutil.rmtree(temp_folder)
     print(f"Total processing time: {time.time() - start_time:.2f} seconds.")
-    normalize_audio(exports_folder)
 
-# Sets all settings, loads model, and runs Main function to process provided folder
+# Load model, parse arguments, and run the main function
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process audio files for 2 pop detection.")
     parser.add_argument("folder_path", type=str, help="Path to the folder containing audio files")
