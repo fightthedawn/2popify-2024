@@ -199,6 +199,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process audio files for 2 pop detection.")
     parser.add_argument("folder_path", type=str, help="Path to the folder containing audio files")
     args = parser.parse_args()
-    model = tf.saved_model.load('ModelsTrained/2popmodel100000-20240110')
+    model = tf.saved_model.load('/Users/giovonnilobato/Documents/GitHub/2popify-2024/ModelsTrained/2popmodel100000-20240110')
     classes = ["Music", "2pop"]
     process_folder(args.folder_path, model, classes)
