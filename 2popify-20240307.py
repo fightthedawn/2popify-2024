@@ -19,6 +19,7 @@ def convert_to_wav(audio_path):
     audio.export(wav_path, format="wav")
     return wav_path
 
+'''
 def butter_bandpass(lowcut, highcut, sr, order=5):
     nyq = 0.5 * sr
     low = lowcut / nyq
@@ -30,6 +31,7 @@ def butter_bandpass_filter(data, lowcut, highcut, sr, order=5):
     b, a = butter_bandpass(lowcut, highcut, sr, order=order)
     y = lfilter(b, a, data)
     return y
+'''
 
 '''# Function to preprocess audio for the model
 def preprocess_audio_for_model(audio_path, target_sr=16000, duration_ms=1500, normalize=True):
