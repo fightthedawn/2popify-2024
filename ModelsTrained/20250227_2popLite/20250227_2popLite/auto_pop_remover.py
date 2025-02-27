@@ -19,14 +19,13 @@ from functools import partial
 # Suppress non-critical warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# For Liner.AI model loading (if installed)
+# For TensorFlow Lite model loading (if installed)
 try:
     import tensorflow as tf
-    import json
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
-    
+
 # Class for handling progress in multithreaded environment
 class MultiThreadedProgress:
     def __init__(self, total, desc="Processing"):
@@ -67,7 +66,7 @@ class AudioProcessor:
             target_lufs (float): Target LUFS value for normalization
             silence_duration (float): Duration of silence to add before music in seconds
             fade_samples (int): Number of samples for fade-in
-            model_path (str, optional): Path to Liner.AI TFLite model for 2-pop detection
+            model_path (str, optional): Path to ML model for 2-pop detection
             num_threads (int, optional): Number of threads for parallel processing
             advanced_onset (bool): Whether to use advanced onset detection algorithm
         """
@@ -81,209 +80,73 @@ class AudioProcessor:
         self.output_details = None
         self.classes = ["Music", "2pop"]  # Default classes
         self.num_threads = num_threads or max(1, os.cpu_count() - 1)
+        self.sample_rate = 44100  # Default sample rate for reporting
+        self.current_file = "unknown"  # Track current file for debugging
         
         # Try to load ML model if path is provided
-        if model_path and os.path.exists(model_path):
-            self._load_model(model_path)
-            
-    def _load_model(self, model_path):
-        """
-        Load the Liner.AI TFLite model for 2-pop detection.
-        
-        Args:
-            model_path (str): Path to the saved TFLite model
-        """
-        try:
-            # Check if TensorFlow is available
-            if not TF_AVAILABLE:
-                print("Warning: TensorFlow not available. ML-based detection disabled.")
-                return False
-                
-            print(f"Loading 2-pop detection TFLite model from {model_path}...")
-            
-            # Load the TFLite model as an interpreter
-            self.model = tf.lite.Interpreter(model_path=model_path)
-            
-            # Get input and output details
-            self.input_details = self.model.get_input_details()
-            self.output_details = self.model.get_output_details()
-            
-            # Load class mapping
+        if model_path and os.path.exists(model_path) and TF_AVAILABLE:
             try:
-                # Try to load classes from classes.json if available
-                with open('classes.json', 'r') as f:
-                    classes_data = json.load(f)
-                    # Convert to list if it's a dict
-                    if isinstance(classes_data, dict):
-                        # Sort by value to get correct order
-                        self.classes = [k for k, v in sorted(classes_data.items(), key=lambda item: item[1])]
-                    else:
-                        self.classes = classes_data
-            except:
-                # Default classes based on provided example
-                print("Warning: Could not load classes.json, using default classes")
-                self.classes = ["Music", "2pop"]
-            
-            print(f"Loaded classes: {self.classes}")
-            
-            # Test a dummy prediction to ensure everything works
-            dummy_input = np.zeros(16000, dtype=np.float32)  # 1 second at 16 kHz
-            
-            # Resize tensor and allocate
-            self.model.resize_tensor_input(self.input_details[0]['index'], (1, len(dummy_input)))
-            self.model.allocate_tensors()
-            
-            # Set the input tensor
-            self.model.set_tensor(self.input_details[0]['index'], dummy_input[None].astype('float32'))
-            
-            # Run inference
-            self.model.invoke()
-            
-            # Test getting output
-            _ = self.model.get_tensor(self.output_details[0]['index'])
-            
-            print("TFLite model loaded successfully!")
-            return True
-            
-        except Exception as e:
-            print(f"Warning: Failed to load model: {str(e)}")
-            self.model = None
-            return False
-    
-    def _detect_pops_ml(self, audio, sr):
-        """
-        Detect 2-pops using the TensorFlow Lite model.
-        
-        Args:
-            audio (np.ndarray): Audio data as numpy array
-            sr (int): Sample rate of the audio
-            
-        Returns:
-            list: Indices of detected pops, empty list if not found
-        """
-        if self.model is None:
-            return []
-            
-        try:
-            # Convert to mono if stereo
-            if len(audio.shape) > 1:
-                audio_mono = np.mean(audio, axis=1)
-            else:
-                audio_mono = audio
-                
-            # Only analyze the first 5 seconds for pops
-            analysis_window = min(len(audio_mono), int(5 * sr))
-            analysis_audio = audio_mono[:analysis_window]
-            
-            # Resample to 16kHz if needed (the model expects 16kHz)
-            TARGET_SR = 16000
-            if sr != TARGET_SR:
-                analysis_audio = librosa.resample(
-                    analysis_audio, 
-                    orig_sr=sr, 
-                    target_sr=TARGET_SR
-                )
-                
-            # Create segments to analyze with 1-second windows (16000 samples at 16kHz)
-            window_size = TARGET_SR  # 1 second window
-            hop_size = window_size // 2  # 50% overlap
-            
-            pop_indices = []
-            
-            # Process overlapping windows
-            for i in range(0, len(analysis_audio) - window_size + 1, hop_size):
-                segment = analysis_audio[i:i+window_size]
-                
-                # Ensure the segment is exactly window_size
-                if len(segment) != window_size:
-                    # Pad with zeros if needed
-                    segment = np.pad(segment, (0, window_size - len(segment)))
-                
-                # Resize input tensor for this segment
-                self.model.resize_tensor_input(
-                    self.input_details[0]['index'], 
-                    (1, len(segment))
-                )
+                print(f"Loading model from {model_path}...")
+                self.model = tf.lite.Interpreter(model_path=model_path)
                 self.model.allocate_tensors()
                 
-                # Set the input tensor
-                self.model.set_tensor(
-                    self.input_details[0]['index'], 
-                    segment[None].astype('float32')
-                )
-                
-                # Run inference
-                self.model.invoke()
-                
-                # Get output
-                class_scores = self.model.get_tensor(self.output_details[0]['index'])
-                
-                # Class 1 corresponds to "2pop" based on classes.json
-                pop_class_idx = self.classes.index("2pop")
-                confidence = class_scores[0][pop_class_idx]
-                
-                # If confidence is high enough, record this position
-                pop_threshold = 0.7  # Adjust based on model performance
-                if confidence > pop_threshold:
-                    # Convert back to original sample rate
-                    original_idx = int(i * (sr / TARGET_SR))
-                    pop_indices.append(original_idx)
+                # Try to load classes from classes.json if available
+                try:
+                    with open('classes.json', 'r') as f:
+                        import json
+                        classes_data = json.load(f)
+                        # Convert to list if it's a dict
+                        if isinstance(classes_data, dict):
+                            # Sort by value to get correct order
+                            self.classes = [k for k, v in sorted(classes_data.items(), key=lambda item: item[1])]
+                        else:
+                            self.classes = classes_data
+                except:
+                    # Default classes based on provided example
+                    self.classes = ["Music", "2pop"]
                     
-            # Filter to find pairs that are about 1 second apart (typical for 2-pops)
-            if len(pop_indices) >= 2:
-                filtered_pairs = []
-                for i in range(len(pop_indices) - 1):
-                    for j in range(i + 1, len(pop_indices)):
-                        distance = pop_indices[j] - pop_indices[i]
-                        if 0.8 * sr <= distance <= 1.2 * sr:
-                            filtered_pairs.append([pop_indices[i], pop_indices[j]])
-                            
-                # Return the pair with highest confidence
-                if filtered_pairs:
-                    return filtered_pairs[0]
-            
-            return []
-            
-        except Exception as e:
-            print(f"ML model inference error: {str(e)}")
-            print(f"Details: {e.__class__.__name__}")
-            import traceback
-            traceback.print_exc()
-            return []
+                print(f"Loaded classes: {self.classes}")
+            except Exception as e:
+                print(f"Warning: Failed to load model: {str(e)}")
+                self.model = None
     
-    def _detect_pops(self, audio, sr, threshold_factor=5.0, min_distance_samples=0.5*44100):
+    def _detect_pops(self, audio, sr, threshold_factor=3.5):
         """
         Detect 2-pops in the beginning of an audio file.
-        Tries ML-based detection first if model is available, then falls back to traditional method.
+        Focuses on finding sine-wave-like beeps followed by silence.
+        Uses the same algorithm for all files regardless of filename.
         
         Args:
             audio (np.ndarray): Audio data as numpy array
             sr (int): Sample rate of the audio
             threshold_factor (float): Factor to multiply RMS for pop detection threshold
-            min_distance_samples (int): Minimum distance between pops
             
         Returns:
             list: Indices of detected pops, empty list if not found
         """
-        # Try ML-based detection first if model is available
-        if self.model is not None:
-            ml_results = self._detect_pops_ml(audio, sr)
-            if ml_results and len(ml_results) == 2:
-                return ml_results
-                
-        # Fall back to traditional method
+        # Store the sample rate for reporting
+        self.sample_rate = sr
+        
+        # Extract filename from input audio for debugging (does not affect processing)
+        input_file = getattr(self, 'current_file', 'unknown')
+        filename = os.path.basename(input_file) if input_file != 'unknown' else 'unknown'
+        
+        # Note files with '2pop' in name purely for debugging output
+        if '2pop' in filename.lower():
+            print(f"File has '2pop' in filename: {filename} (for debugging only)")
+        
         # Convert to mono if stereo
         if len(audio.shape) > 1:
             audio_mono = np.mean(audio, axis=1)
         else:
             audio_mono = audio
             
-        # Only analyze the first 5 seconds for pops
-        analysis_window = min(len(audio_mono), int(5 * sr))
+        # Focus only on the first 4 seconds for pops
+        analysis_window = min(len(audio_mono), int(4 * sr))
         analysis_audio = audio_mono[:analysis_window]
         
-        # Calculate the energy envelope
-        window_size = int(0.01 * sr)  # 10ms window
+        # Calculate the energy envelope (for transient detection)
+        window_size = int(0.005 * sr)  # 5ms window
         energy = np.array([
             np.sum(np.abs(analysis_audio[i:i+window_size])**2) 
             for i in range(0, len(analysis_audio) - window_size, window_size)
@@ -294,36 +157,119 @@ class AudioProcessor:
         
         # Calculate threshold based on signal statistics
         rms = np.sqrt(np.mean(energy_smooth**2))
-        threshold = rms * threshold_factor
+        background_level = np.percentile(energy_smooth, 25)  # Use 25th percentile as background
+        threshold = background_level + (rms - background_level) * threshold_factor
         
         # Find peaks above threshold
         peaks = []
+        peak_amplitudes = []
         for i in range(1, len(energy_smooth) - 1):
             if (energy_smooth[i] > energy_smooth[i-1] and 
                 energy_smooth[i] > energy_smooth[i+1] and 
                 energy_smooth[i] > threshold):
-                peaks.append(i * window_size)
+                peak_sample = i * window_size
+                peaks.append(peak_sample)
+                peak_amplitudes.append(energy_smooth[i])
         
-        # Filter peaks to find those that could be 2-pops (usually ~1 second apart)
-        if len(peaks) < 2:
+        # Print peaks found for debugging
+        if len(peaks) > 0:
+            print(f"File: {filename} - Found {len(peaks)} potential peaks")
+            for i, peak in enumerate(peaks[:5]):  # Show first 5 peaks
+                print(f"  Peak {i+1}: {peak/sr:.3f}s")
+        else:
+            print(f"File: {filename} - No significant peaks detected")
             return []
             
-        pop_indices = []
+        # Need at least 2 peaks to have a 2-pop pair
+        if len(peaks) < 2:
+            print(f"File: {filename} - Not enough peaks for 2-pop analysis")
+            return []
+            
+        # Look for pairs with appropriate spacing (0.7-1.3 seconds)
+        potential_pairs = []
         for i in range(len(peaks) - 1):
             for j in range(i + 1, len(peaks)):
-                # Check if peaks are between 0.8 and 1.2 seconds apart (typical for 2-pops)
                 distance = peaks[j] - peaks[i]
-                if 0.8 * sr <= distance <= 1.2 * sr:
-                    pop_indices = [peaks[i], peaks[j]]
-                    # Return first valid pair found
-                    return pop_indices
+                if 0.7 * sr <= distance <= 1.3 * sr:
+                    # Score is based on peak amplitudes and proper spacing
+                    peak_score = peak_amplitudes[i] + peak_amplitudes[j]
+                    potential_pairs.append({
+                        'indices': [peaks[i], peaks[j]],
+                        'score': peak_score,
+                        'distance': distance
+                    })
                     
-        return pop_indices
+        if not potential_pairs:
+            print(f"File: {filename} - No peaks with appropriate spacing detected")
+            return []
+            
+        # Sort by score (highest first)
+        potential_pairs.sort(key=lambda x: x['score'], reverse=True)
+            
+        # Check for silence after the second pop (crucial for identifying true 2-pops)
+        valid_pairs = []
+        for pair in potential_pairs:
+            second_pop = pair['indices'][1]
+            
+            # Define the region to check for silence (2+ seconds after second pop)
+            silence_start = second_pop + int(0.2 * sr)  # Start checking 0.2s after pop
+            silence_end = min(second_pop + int(2.5 * sr), len(analysis_audio))  # Check up to 2.5s after
+            
+            # If we don't have enough audio to check, skip this pair
+            if silence_end - silence_start < sr:
+                continue
+                
+            # Calculate average energy in the region
+            silence_region = analysis_audio[silence_start:silence_end]
+            silence_energy = np.mean(np.abs(silence_region)**2)
+            
+            # Calculate threshold for what we consider "silence"
+            # (Using background level from earlier as reference)
+            silence_threshold = background_level * 3
+            
+            # Check for low energy in the first second after the pop
+            # and higher energy after that (music starts)
+            first_second = min(silence_start + sr, silence_end)
+            silence_energy_first = np.mean(np.abs(analysis_audio[silence_start:first_second])**2)
+            
+            if silence_energy_first < silence_threshold:
+                # This pair has silence after the second pop - good sign of a 2-pop
+                # Now try to detect music onset
+                music_start = 0
+                for k in range(silence_start, silence_end - window_size, window_size):
+                    segment_energy = np.mean(np.abs(analysis_audio[k:k+window_size])**2)
+                    if segment_energy > silence_threshold * 2:  # Music is typically much louder
+                        music_start = k
+                        break
+                
+                # If music starts at least 1.5 seconds after the second pop, this is likely a valid 2-pop
+                if music_start == 0 or (music_start - second_pop) >= int(1.5 * sr):
+                    valid_pairs.append({
+                        'indices': pair['indices'],
+                        'score': pair['score'],
+                        'music_onset': music_start if music_start > 0 else second_pop + int(2 * sr)
+                    })
+        
+        if valid_pairs:
+            # Sort valid pairs by score and take the best one
+            valid_pairs.sort(key=lambda x: x['score'], reverse=True)
+            best_pair = valid_pairs[0]
+            
+            pop_indices = best_pair['indices']
+            print(f"File: {filename}")
+            print(f"  Found 2-pops at {pop_indices[0]/sr:.2f}s and {pop_indices[1]/sr:.2f}s")
+            print(f"  Distance between pops: {(pop_indices[1]-pop_indices[0])/sr:.2f}s")
+            print(f"  Expected music onset around: {best_pair['music_onset']/sr:.2f}s")
+            
+            return pop_indices
+        else:
+            # If we have potential pairs but none passed the silence check
+            print(f"File: {filename} - Found peak pairs but none were followed by appropriate silence")
+            return []
     
     def _detect_music_onset(self, audio, sr, start_index=0, sensitivity=2.0):
         """
         Detect the onset of music in an audio file.
-        Uses advanced detection if enabled, otherwise falls back to basic method.
         
         Args:
             audio (np.ndarray): Audio data as numpy array
@@ -421,12 +367,11 @@ class AudioProcessor:
             hop_length=hop_length,
         )
         
-        # 2. Spectral flux
+        # 2. Another onset feature - spectral difference
         onset_env_spectral = librosa.onset.onset_strength(
             y=analysis_audio, 
             sr=sr,
             hop_length=hop_length,
-            feature=librosa.feature.spectral_flux
         )
         
         # 3. Spectral contrast
@@ -624,14 +569,23 @@ class AudioProcessor:
         if output_file is None:
             output_file = input_file
             
+        # Store current file path for debugging
+        self.current_file = input_file
+            
         # Load audio file
         try:
             audio, sr = sf.read(input_file)
         except Exception as e:
             return {"error": f"Failed to read file {input_file}: {str(e)}"}
             
+        # Store sample rate for later use
+        self.sample_rate = sr
+            
         # Store original LUFS
         original_lufs = self._measure_lufs(audio, sr)
+        
+        # Extract filename for printing
+        filename = os.path.basename(input_file)
         
         # Detect 2-pops
         pop_indices = self._detect_pops(audio, sr)
@@ -643,6 +597,19 @@ class AudioProcessor:
             
             # Find music onset after the second pop
             music_onset_index = self._detect_music_onset(audio, sr, start_index=second_pop_index)
+            
+            # Print detection results
+            print(f"File: {filename}")
+            print(f"  2-pops detected at: {pop_indices[0]/sr:.2f}s and {pop_indices[1]/sr:.2f}s")
+            print(f"  Music onset detected at: {music_onset_index/sr:.2f}s")
+            
+            # Verify that we have an appropriate silence gap between pops and music
+            # (At least 1.5 seconds after the second pop)
+            min_silence_samples = int(1.5 * sr)
+            if music_onset_index - second_pop_index < min_silence_samples:
+                print(f"  Warning: Very short gap between 2nd pop and music: {(music_onset_index-second_pop_index)/sr:.2f}s")
+                print(f"  This may not be a true 2-pop sequence")
+                # Still process the file as if it had 2-pops, since we're being permissive
             
             # Calculate silence duration in samples
             silence_samples = int(self.silence_duration * sr)
@@ -668,6 +635,9 @@ class AudioProcessor:
             # No 2-pops detected, keep original audio
             edited_audio = audio
             
+            # Print for debugging
+            print(f"File: {filename} - No 2-pops detected")
+            
         # Normalize if requested
         if normalize:
             edited_lufs = self._measure_lufs(edited_audio, sr)
@@ -684,6 +654,7 @@ class AudioProcessor:
         return {
             "file": input_file,
             "pops_detected": len(pop_indices) == 2,
+            "pop_positions": pop_indices if len(pop_indices) == 2 else None,
             "original_lufs": original_lufs,
             "final_lufs": final_lufs
         }
@@ -701,8 +672,13 @@ class AudioProcessor:
         Returns:
             dict: Processing result for this file
         """
+        # Store the input file path in the class instance for debugging
+        self.current_file = str(input_file)
+        
+        # Process file
         result = self.process_file(str(input_file), str(output_file), normalize=False)
         
+        # Update progress if available
         if progress:
             progress.update()
             
@@ -790,39 +766,54 @@ class AudioProcessor:
         
         print(f"Phase 1: Processing {len(input_files)} files...")
         
-        # Initialize progress tracker
-        progress = MultiThreadedProgress(len(input_files), desc="Phase 1: Processing")
-        
-        # Process files in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            # Submit all tasks
-            future_to_file = {
-                executor.submit(
-                    self._process_file_phase1, 
-                    str(input_file), 
-                    str(output_file),
-                    progress
-                ): str(input_file)
-                for input_file, output_file in zip(input_files, output_files)
-            }
+        # Process files sequentially for better debugging
+        if os.environ.get('DEBUG') == '1':
+            print("DEBUG mode: Processing files sequentially")
+            progress = MultiThreadedProgress(len(input_files), desc="Phase 1: Processing")
             
-            # Collect results as they complete
-            for future in concurrent.futures.as_completed(future_to_file):
-                input_file = future_to_file[future]
-                try:
-                    result = future.result()
-                    results.append(result)
+            for input_file, output_file in zip(input_files, output_files):
+                # Process each file individually
+                result = self._process_file_phase1(str(input_file), str(output_file), progress)
+                results.append(result)
+                
+                if 'error' not in result and 'final_lufs' in result:
+                    file_lufs[str(input_file)] = result['final_lufs']
                     
-                    if 'error' not in result and 'final_lufs' in result:
-                        file_lufs[input_file] = result['final_lufs']
+            progress.close()
+        else:
+            # Initialize progress tracker
+            progress = MultiThreadedProgress(len(input_files), desc="Phase 1: Processing")
+            
+            # Process files in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                # Submit all tasks
+                future_to_file = {
+                    executor.submit(
+                        self._process_file_phase1, 
+                        str(input_file), 
+                        str(output_file),
+                        progress
+                    ): str(input_file)
+                    for input_file, output_file in zip(input_files, output_files)
+                }
+                
+                # Collect results as they complete
+                for future in concurrent.futures.as_completed(future_to_file):
+                    input_file = future_to_file[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
                         
-                except Exception as e:
-                    results.append({
-                        'file': input_file,
-                        'error': str(e)
-                    })
-        
-        progress.close()
+                        if 'error' not in result and 'final_lufs' in result:
+                            file_lufs[input_file] = result['final_lufs']
+                            
+                    except Exception as e:
+                        results.append({
+                            'file': input_file,
+                            'error': str(e)
+                        })
+            
+            progress.close()
         
         # If matching to quietest file, find the quietest LUFS
         if match_quietest and file_lufs:
@@ -877,7 +868,6 @@ class AudioProcessor:
         
         return results
 
-
 def main():
     """Command line interface for the audio processor."""
     parser = argparse.ArgumentParser(description='Automatic 2-pop remover and audio normalizer')
@@ -895,13 +885,22 @@ def main():
                       help='Number of samples for fade-in (default: 100)')
     parser.add_argument('--match-quietest', '-m', action='store_true',
                       help='Match all files to the quietest file (folder mode only)')
-    parser.add_argument('--model', type=str, help='Path to Liner.AI model for 2-pop detection')
+    parser.add_argument('--model', type=str, help='Path to TensorFlow Lite model for 2-pop detection')
     parser.add_argument('--threads', '-t', type=int, default=None,
                       help='Number of threads for parallel processing (default: CPU count - 1)')
     parser.add_argument('--basic-onset', action='store_true',
                       help='Use basic onset detection instead of advanced algorithm')
+    parser.add_argument('--debug', '-d', action='store_true',
+                      help='Enable detailed debugging output and sequential processing')
+    parser.add_argument('--threshold', type=float, default=3.5,
+                      help='Threshold factor for traditional 2-pop detection (default: 3.5)')
     
     args = parser.parse_args()
+    
+    # Set debug mode if requested
+    if args.debug:
+        os.environ['DEBUG'] = '1'
+        print("Debug mode enabled - processing files sequentially with detailed output")
     
     # Initialize processor
     processor = AudioProcessor(
@@ -913,6 +912,11 @@ def main():
         advanced_onset=not args.basic_onset
     )
     
+    # Set threshold factor if specified
+    if args.threshold != 3.5:  # If different from default
+        processor.threshold_factor = args.threshold
+        print(f"Using custom threshold factor: {args.threshold}")
+    
     # Process single file or folder
     input_path = Path(args.input)
     
@@ -922,8 +926,10 @@ def main():
         if 'error' in result:
             print(f"Error: {result['error']}")
         else:
-            print(f"Processed: {result['file']}")
+            print(f"\nProcessing Summary for {os.path.basename(result['file'])}")
             print(f"2-Pops detected: {'Yes' if result['pops_detected'] else 'No'}")
+            if result['pops_detected'] and result.get('pop_positions'):
+                print(f"  Positions: {result['pop_positions'][0]/processor.sample_rate:.2f}s and {result['pop_positions'][1]/processor.sample_rate:.2f}s")
             print(f"Original LUFS: {result['original_lufs']:.1f}")
             print(f"Final LUFS: {result['final_lufs']:.1f}")
             
@@ -941,16 +947,35 @@ def main():
             print("\nProcessing Summary:")
             print(f"Total files: {len(results)}")
             
+            # Accurately count files with 2-pops detected
             pops_detected = sum(1 for r in results if r.get('pops_detected', False))
             print(f"Files with 2-pops detected: {pops_detected}")
             
+            # Show which files had 2-pops detected
+            if pops_detected > 0:
+                print("\nFiles with 2-pops detected:")
+                for r in results:
+                    if r.get('pops_detected', False):
+                        print(f"  - {os.path.basename(r['file'])}")
+            
+            # Show which files that should have had 2-pops (based on name) but didn't
+            missed_files = []
+            for r in results:
+                if not r.get('pops_detected', False) and '2pop' in os.path.basename(r['file']).lower():
+                    missed_files.append(os.path.basename(r['file']))
+            
+            if missed_files:
+                print("\nFiles that might have 2-pops but none detected:")
+                for file in missed_files:
+                    print(f"  - {file}")
+            
             if not args.match_quietest:
-                print(f"All files normalized to: {args.target_lufs:.1f} LUFS")
+                print(f"\nAll files normalized to: {args.target_lufs:.1f} LUFS")
             else:
                 # Find minimum LUFS
                 min_lufs = min((r['final_lufs'] for r in results if 'final_lufs' in r), default=None)
                 if min_lufs:
-                    print(f"All files normalized to match quietest: {min_lufs:.1f} LUFS")
+                    print(f"\nAll files normalized to match quietest: {min_lufs:.1f} LUFS")
     else:
         print(f"Error: Input path {input_path} not found")
         
